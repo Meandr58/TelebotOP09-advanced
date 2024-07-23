@@ -19,12 +19,15 @@ facts = [
 
 # Словарь для хранения пользовательских напоминаний
 user_reminders = {}
+lock = threading.Lock()
 
 @bot.message_handler(commands=['start'])
 def start_message(message):
     bot.reply_to(message, 'Привет! Я чат бот, который будет напоминать тебе пить водичку!')
-    reminder_thread = threading.Thread(target=send_reminders, args=(message.chat.id,))
-    reminder_thread.start()
+    if not any(thread.name == str(message.chat.id) for thread in threading.enumerate()):
+        reminder_thread = threading.Thread(target=send_reminders, args=(message.chat.id,), name=str(message.chat.id))
+        reminder_thread.start()
+
 
 @bot.message_handler(commands=['fact'])
 def send_random_fact(message):
@@ -37,16 +40,18 @@ def set_reminder(message):
         # Формат команды: /set_reminder HH:MM
         reminder_time = message.text.split()[1]
         datetime.datetime.strptime(reminder_time, '%H:%M')  # Проверка формата времени
-        if message.chat.id not in user_reminders:
-            user_reminders[message.chat.id] = []
-        user_reminders[message.chat.id].append(reminder_time)
+        with lock:
+            if message.chat.id not in user_reminders:
+                user_reminders[message.chat.id] = []
+            user_reminders[message.chat.id].append(reminder_time)
         bot.reply_to(message, f'Напоминание установлено на {reminder_time}')
     except (IndexError, ValueError):
         bot.reply_to(message, 'Пожалуйста, укажите время в формате HH:MM. Пример: /set_reminder 15:30')
 
 @bot.message_handler(commands=['view_reminders'])
 def view_reminders(message):
-    reminders = user_reminders.get(message.chat.id, [])
+    with lock:
+        reminders = user_reminders.get(message.chat.id, [])
     if reminders:
         reminders_str = '\n'.join(reminders)
         bot.reply_to(message, f'Ваши напоминания:\n{reminders_str}')
@@ -57,11 +62,16 @@ def view_reminders(message):
 def send_reminders(chat_id):
     while True:
         now = datetime.datetime.now().strftime('%H:%M')
-        reminders = user_reminders.get(chat_id, [])
-        if now in reminders:
-            bot.send_message(chat_id, "Напоминание - выпей стакан воды")
-            time.sleep(61)
-        time.sleep(1)
+        with lock:
+            reminders = user_reminders.get(chat_id, [])
+            if now in reminders:
+               try:
+                   bot.send_message(chat_id, "Напоминание - выпей стакан воды")
+                   logging.info(f'Напоминание отправлено в {now} пользователю {chat_id}')
+               except Exception as e:
+                   logging.error(f'Ошибка при отправке сообщения пользователю {chat_id}: {e}')
+
+        time.sleep(60)
 
 # Обработка ошибок
 @bot.message_handler(func=lambda message: True)
